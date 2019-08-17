@@ -6,9 +6,11 @@ var graph,
     MAP_VISIBILITY = {},
     MAP_PROGRESS_BAR = {},
     MAP_SPEEDOMETER = {},
-    MAP_CALLBACKS = {},
+    MAP_BUTTONS = {},
+    MAP_ACTION_CALLBACKS = {},
     MAP_ANIMATIONS = {},
     DYNAMIC_CELLS = {},
+    MAP_DEVICES = [],
     mapData,
     mapTheme = 'light',
     graphContainer,
@@ -18,33 +20,31 @@ var graph,
     renderingPitch,
     pitchInterval,
     asyncData = {},
-    notifications = [],
+    notifications = {},
     asyncStatus = false,
     asyncPingInterval,
     numbersRoundPrecision,
-    httpAjaxRequestInterval,
+    httpAjaxRequestInterval = {},
     protocolType,
     protocolParams,
     toasterParams = {},
     notificationMenuOpen = null,
     refreshingMap = false,
-    pages = [];
+    pages = [],
+    alarmSounds = {},
+    muteAlarms = false,
+    fakeDataGeneration = false,
+    TOKEN,
+    API_SERVICES,
+    TEMPERATURE_THRESHOLD,
+    HUMIDITY_THRESHOLD,
+    deviceAlarmState = [];
 
 var cw, ch,
     margin = 50,
     max = 2;
 
 var containerDOM, outlineDOM, statusDOM;
-
-/**
- * Extending Array push
- */
-notifications.push = function() {
-    // var element = document.getElementById(notificationContainer);
-    // element.insertBefore(arguments[0], element.firstChild);
-    // Toastify.reposition();
-    return Array.prototype.push.apply(this, arguments);
-};
 
 /**
  * Async Functions
@@ -61,7 +61,7 @@ function initAsync(params) {
      * Whenever your Async connection gets asyncReady
      * you would be abale to send messages through
      */
-    asyncClient.on('asyncReady', function() {
+    asyncClient.on('asyncReady', function () {
         updateMap();
         primaryHandshake();
     });
@@ -71,7 +71,7 @@ function initAsync(params) {
      * @param   {string}    msg     Received Message From Async
      * @param   {function}  ack     Callback function responsible of returning acknowledgements
      */
-    asyncClient.on('message', function(msg, ack) {
+    asyncClient.on('message', function (msg, ack) {
         /**
          * HMI map should be updated whenever some new
          * messages come from async gate so that the
@@ -80,11 +80,13 @@ function initAsync(params) {
 
         var content = JSON.parse(msg.content);
 
-        switch(content.type) {
+        switch (content.type) {
+            // Tag Data
             case 14:
                 try {
                     var newContent = JSON.parse(JSON.parse(content.content));
-                } catch(e) {
+                }
+                catch (e) {
                     console.log(e);
                 }
                 finally {
@@ -92,10 +94,12 @@ function initAsync(params) {
                 }
                 break;
 
+            // Alarms
             case 15:
                 try {
                     var newContent = JSON.parse(content.content);
-                } catch(e) {
+                }
+                catch (e) {
                     console.log(e);
                 }
                 finally {
@@ -103,6 +107,23 @@ function initAsync(params) {
                 }
 
                 handleNotifications(newContent);
+                break;
+
+            // On Alarm Acknowledge
+            case 16:
+                try {
+                    var newContent = JSON.parse(content.content);
+                }
+                catch (e) {
+                    console.log(e);
+                }
+                finally {
+                    document.getElementById(newContent.entityId + '-close').disabled = false;
+                }
+                break;
+
+            // On Alarm Close
+            case 17:
                 break;
 
             default:
@@ -114,7 +135,7 @@ function initAsync(params) {
      * To show Async Status, we need to get state changes of
      * async connection and display the state on the page
      */
-    asyncClient.on('stateChange', function(state) {
+    asyncClient.on('stateChange', function (state) {
         switch (state.socketState) {
             case 0:
                 asyncStatus = false;
@@ -134,7 +155,7 @@ function initAsync(params) {
                  */
                 pitchInterval && clearInterval(pitchInterval);
 
-                pitchInterval = setInterval(function() {
+                pitchInterval = setInterval(function () {
                     renderLiveDataOnMapWithPitch(asyncData);
                 }, renderingPitch * 1000);
 
@@ -180,39 +201,6 @@ function sendAsyncMessage(msg) {
 
 function initHttp(params) {
     updateMap();
-
-    httpAjaxRequestInterval = setInterval(function() {
-        let xhr = new XMLHttpRequest();
-        xhr.open(params.method, params.url + '&rand=' + Math.random());
-        xhr.send();
-        xhr.onerror = function() {
-            document.getElementById('toolbar-lastUpdate').innerText = 'Error at ' + new Date().toLocaleTimeString();
-            document.getElementById('toolbar-lastUpdate').style.background = 'red';
-            document.getElementById('toolbar-lastUpdate').style.color = 'white';
-        };
-        xhr.onload = function() {
-            if (xhr.status != 200) {
-                console.error(`Error ${xhr.status}: ${xhr.statusText}`);
-
-                document.getElementById('toolbar-lastUpdate').innerText = 'Error at ' + new Date().toLocaleTimeString();
-                document.getElementById('toolbar-lastUpdate').style.background = 'red';
-                document.getElementById('toolbar-lastUpdate').style.color = 'white';
-            }
-            else {
-                try {
-                    var result = JSON.parse(xhr.responseText);
-                    renderLiveDataOnMapWithPitch(result);
-
-                    document.getElementById('toolbar-lastUpdate').innerText = 'Last updated at ' + new Date().toLocaleTimeString();
-                    document.getElementById('toolbar-lastUpdate').style.background = 'green';
-                    document.getElementById('toolbar-lastUpdate').style.color = 'white';
-                }
-                catch (e) {
-                    console.log(e);
-                }
-            }
-        };
-    }, renderingPitch * 1000);
 }
 
 function primaryHandshake() {
@@ -227,7 +215,7 @@ function primaryHandshake() {
 function asyncPing() {
     asyncPingInterval && clearInterval(asyncPingInterval);
 
-    asyncPingInterval = setInterval(function() {
+    asyncPingInterval = setInterval(function () {
         var data = {
             type: 12,
             content: ''
@@ -284,8 +272,20 @@ function main(params) {
 
     else {
         if (params) {
+            if (typeof params.fakeData == "boolean") {
+                fakeDataGeneration = params.fakeData;
+            }
+
             if (typeof params.protocol == 'string') {
                 protocolType = params.protocol;
+            }
+
+            if (typeof params.token == 'string') {
+                TOKEN = params.token;
+            }
+
+            if (typeof params.services == 'object') {
+                API_SERVICES = params.services;
             }
 
             if (typeof params.protocolParams == 'object') {
@@ -333,13 +333,13 @@ function main(params) {
             if (typeof params.renderingPitch == 'string') {
                 switch (params.renderingPitch) {
                     case 'high':
-                        renderingPitch = 2;
+                        renderingPitch = 0.5;
                         break;
                     case 'medium':
-                        renderingPitch = 5;
+                        renderingPitch = 2;
                         break;
                     case 'low':
-                        renderingPitch = 10;
+                        renderingPitch = 5;
                         break;
                     default:
                         renderingPitch = 5;
@@ -354,6 +354,14 @@ function main(params) {
                 if (!notificationMenuOpen) {
                     document.getElementById(notificationContainer).style.display = 'none';
                 }
+            }
+
+            if (params.thresholds && typeof params.thresholds.temperature == 'number') {
+                TEMPERATURE_THRESHOLD = params.thresholds.temperature;
+            }
+
+            if (params.thresholds && typeof params.thresholds.humidity == 'number') {
+                HUMIDITY_THRESHOLD = params.thresholds.humidity;
             }
 
             numbersRoundPrecision = (typeof params.numbersRoundPrecision == 'number') ? params.numbersRoundPrecision : 2;
@@ -385,7 +393,7 @@ function main(params) {
         // });
 
         graph.addMouseListener({
-            mouseDown: function(sender, evt) {
+            mouseDown: function (sender, evt) {
                 if (typeof evt.sourceState == 'object') {
                     var cell = evt.state.cell;
                     var pageLink = cell.getAttribute('link');
@@ -403,19 +411,46 @@ function main(params) {
                         }
                     }
 
-                    if (MAP_CALLBACKS.hasOwnProperty(evt.sourceState.cell.id)) {
-                        return Function('"use strict";return (' + MAP_CALLBACKS[evt.sourceState.cell.id] + ')')();
+                    if (MAP_BUTTONS.hasOwnProperty(evt.sourceState.cell.id)) {
+                        var buttonEntityId = MAP_BUTTONS[evt.sourceState.cell.id];
+                        if (MAP_ACTION_CALLBACKS[buttonEntityId]) {
+                            switch (MAP_ACTION_CALLBACKS[buttonEntityId].type) {
+                                case 'simplePushButton':
+                                    return Function(MAP_ACTION_CALLBACKS[buttonEntityId].action)();
+                                    break;
+
+                                case 'toggleButton':
+                                    switch (MAP_ACTION_CALLBACKS[buttonEntityId].currentState) {
+                                        case 0:
+                                            MAP_ACTION_CALLBACKS[buttonEntityId].currentState = 1;
+                                            var edit = new mxCellAttributeChange(evt.sourceState.cell, 'label', MAP_ACTION_CALLBACKS[buttonEntityId].states[1].title);
+                                            graph.model.execute(edit);
+
+                                            return Function(MAP_ACTION_CALLBACKS[buttonEntityId].states[0].action)();
+                                            break;
+
+                                        case 1:
+                                            MAP_ACTION_CALLBACKS[buttonEntityId].currentState = 0;
+                                            var edit = new mxCellAttributeChange(evt.sourceState.cell, 'label', MAP_ACTION_CALLBACKS[buttonEntityId].states[0].title);
+                                            graph.model.execute(edit);
+
+                                            return Function(MAP_ACTION_CALLBACKS[buttonEntityId].states[1].action)();
+                                            break;
+                                    }
+                                    break;
+                            }
+                        }
                     }
                 }
             },
-            mouseMove: function(sender, evt) {
+            mouseMove: function (sender, evt) {
             },
-            mouseUp: function(sender, evt) {
+            mouseUp: function (sender, evt) {
             }
         });
 
         // Render animations again on map resize or move
-        graph.sizeDidChange = function() {
+        graph.sizeDidChange = function () {
             // TODO: Check if this is neccessary or what?!
             // renderLiveDataOnMapWithPitch(asyncData);
         };
@@ -498,12 +533,14 @@ function main(params) {
          * For Mockup Tests
          * TODO : Remove at production mode
          */
-        // updateMap();
-        // fakeDataGenerator();
-        // pitchInterval && clearInterval(pitchInterval);
-        // pitchInterval = setInterval(function() {
-        //     renderLiveDataOnMapWithPitch(asyncData);
-        // }, renderingPitch * 1000);
+        if (fakeDataGeneration) {
+            // updateMap();
+            fakeDataGenerator();
+            pitchInterval && clearInterval(pitchInterval);
+            pitchInterval = setInterval(function () {
+                renderLiveDataOnMapWithPitch(asyncData);
+            }, renderingPitch * 1000);
+        }
     }
 }
 
@@ -590,6 +627,7 @@ function createGraph(graphContainer, toolbarContainer, outlineContainer) {
         if (notificationContainer) {
             addToolbarButton(graph, toolbarContainer, 'notifications', (notificationMenuOpen) ? 'Notifications: On' : 'Notifications: Off', '', false);
         }
+        addToolbarButton(graph, toolbarContainer, 'mute', (muteAlarms) ? 'Mute' : 'Mute', '', false);
         addToolbarButton(graph, toolbarContainer, 'mainPage', '', 'style/img/home.svg', false);
         addToolbarButton(graph, toolbarContainer, 'zoomIn', '', 'style/img/zoom-in.svg', false);
         addToolbarButton(graph, toolbarContainer, 'zoomOut', '', 'style/img/zoom-out.svg', false);
@@ -599,7 +637,7 @@ function createGraph(graphContainer, toolbarContainer, outlineContainer) {
             addToolbarButton(graph, toolbarContainer, 'theme', '', 'style/img/theme.svg', false);
         }
     }
-    graph.dblClick = function(evt, cell) {
+    graph.dblClick = function (evt, cell) {
         graph.zoomIn();
     };
 
@@ -608,6 +646,7 @@ function createGraph(graphContainer, toolbarContainer, outlineContainer) {
 
 function renderLiveDataOnMapWithPitch(content) {
     if (!refreshingMap) {
+        // refreshingMap = true;
         var model = graph.getModel();
         model.beginUpdate();
 
@@ -616,174 +655,42 @@ function renderLiveDataOnMapWithPitch(content) {
                 value = content[key].value || 0,
                 type = content[key].entityType || '';
 
-            // if (type.toLowerCase() == 'alarm') {
-            //     handleNotifications(content[key]);
-            // }
-            // else {
-                if (DYNAMIC_CELLS[entityId]) {
+            if (DYNAMIC_CELLS[entityId]) {
+                if (type === "deviceTag") {
                     for (var i = 0; i < DYNAMIC_CELLS[entityId].length; i++) {
-                        switch (DYNAMIC_CELLS[entityId][i].type) {
-
-                            case 'visibility':
-                                try {
-                                    var vis = DYNAMIC_CELLS[entityId][i],
-                                        cell = vis.cell,
-                                        visOpacities = vis.opacities,
-                                        visValues = vis.values;
-
-                                    visValueIndex = visValues.indexOf(parseInt(value));
-                                    var opacity = visOpacities[visValueIndex];
-                                }
-                                catch (e) {
-                                    console.error(e);
-                                }
-                                finally {
-                                    // graph.getModel().setVisible(cell, value);
-                                    graph.setCellStyles(mxConstants.STYLE_OPACITY, opacity, [cell]);
-                                }
-                                break;
-
-                            case 'led':
-                                try {
-                                    var led = DYNAMIC_CELLS[entityId][i],
-                                        cell = led.cell,
-                                        ledColors = led.colors,
-                                        ledValues = led.values;
-
-                                    ledValueIndex = ledValues.indexOf(parseInt(value));
-                                    var color = ledColors[ledValueIndex];
-                                }
-                                catch (e) {
-                                    console.error(e);
-                                }
-                                finally {
-                                    graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, color, [cell]);
-                                }
-                                break;
-
-                            case 'progress_bar':
-                                try {
-                                    var progressBar = DYNAMIC_CELLS[entityId][i],
-                                        cell = progressBar.cell,
-                                        cellOrientation = progressBar.cellOrientation;
-                                }
-                                catch (e) {
-                                    console.error(e);
-                                }
-                                finally {
-                                    var cellGeometry = cell.getGeometry();
-
-                                    if (cellOrientation == 'vertical') {
-                                        cellGeometry.height = parseInt(value / progressBar.valueRatio);
-                                        cellGeometry.y = progressBar.endPoint.y - parseInt(value / progressBar.valueRatio);
-                                    }
-                                    else {
-                                        cellGeometry.width = parseInt(value / progressBar.valueRatio);
-                                    }
-
-                                    var color = progressBar.progressBarColors[0];
-
-                                    for (var k = 0; k < progressBar.progressBarStops.length; k++) {
-                                        if (value > progressBar.progressBarStops[k]) {
-                                            color = progressBar.progressBarColors[k];
-                                        }
-                                        else {
-                                            color = progressBar.progressBarColors[k - 1];
-                                            break;
-                                        }
-                                    }
-
-                                    graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, color, [cell]);
-                                }
-                                break;
-
-                            case 'speedometer':
-                                try {
-                                    var speedometer = DYNAMIC_CELLS[entityId][i],
-                                        cell = speedometer.cell;
-                                }
-                                catch (e) {
-                                    console.error(e);
-                                }
-                                finally {
-                                    var cellGeometry = cell.getGeometry();
-
-                                    var angel = ((value - speedometer.previousValue) *
-                                        speedometer.angel) / speedometer.maxValue -
-                                        speedometer.minValue;
-
-                                    cellGeometry.rotate(angel, cellGeometry.sourcePoint);
-
-                                    DYNAMIC_CELLS[entityId][i].previousValue = value;
-                                    graph.getView()
-                                        .clear(cell, false, false);
-                                    graph.getView()
-                                        .validate();
-
-                                    // var state = graph.view.getState(cell);
-                                    //
-                                    // if (state) {
-                                    //     var cssStyle = `
-                                    //         transform-origin: ${state.origin.x}px ${state.origin.y}px;
-                                    //         -webkit-transform: rotate(${angel}deg);
-                                    //         transform: rotate(${angel}deg);
-                                    //     `;
-                                    //
-                                    //     var edit = new mxCellAttributeChange(cell, 'style', cssStyle);
-                                    //     graph.model.execute(edit);
-                                    //
-                                    //     graph.getView().clear(cell, false, false);
-                                    //     graph.getView().validate();
-                                    //
-                                    //     // Pure Javascript
-                                    //     // state.shape.node.firstChild.classList.add('rotate-center-' + uniqueId);
-                                    // }
-                                }
-                                break;
-
-                            default:
-                                try {
-                                    var customNode = DYNAMIC_CELLS[entityId][i],
-                                        cell = customNode.cell,
-                                        unit = customNode.unit || '';
-
-                                    var label = cell.getAttribute('label');
-                                    var newValue = Math.round(value * Math.pow(10, numbersRoundPrecision)) / Math.pow(10, numbersRoundPrecision) + ' ' + unit;
-
-                                    if (label.indexOf('<') != -1) {
-                                        var regex = /[>]([^<\n]+?)[<]/gm;
-                                        var result = label.match(regex);
-
-                                        if (result.length == 1) {
-                                            var newLabel = label.replace(new RegExp(regex), '>' + newValue.toString() + '<');
-                                            // cell.value.setAttribute('label', mim);
-                                            var edit = new mxCellAttributeChange(cell, 'label', newLabel);
-                                            graph.model.execute(edit);
-                                        }
-                                        else {
-                                            var start = label.indexOf(result[0]);
-                                            var end = label.indexOf(result[result.length - 1]);
-                                            var newLabel = label.substr(0, start + 1) + newValue.toString() +
-                                                label.substring(end + result[result.length - 1].length - 1, label.length);
-                                            // cell.value.setAttribute('label', newLabel);
-                                            var edit = new mxCellAttributeChange(cell, 'label', newLabel);
-                                            graph.model.execute(edit);
-                                        }
-                                    }
-                                    else {
-                                        // cell.value.setAttribute('label', newValue);
-                                        var edit = new mxCellAttributeChange(cell, 'label', newValue);
-                                        graph.model.execute(edit);
-                                    }
-                                }
-                                catch (e) {
-                                    console.error(e);
-                                }
-                                break;
+                        if (DYNAMIC_CELLS[entityId][i].sensor == content[key].sensor) {
+                            updateMapElementByType(entityId, value, i);
                         }
                     }
+                } else {
+                    for (var i = 0; i < DYNAMIC_CELLS[entityId].length; i++) {
+                        updateMapElementByType(entityId, value, i);
+                    }
                 }
-            // }
+
+                // TODO to delete or not to delete :\
+                graph.refresh();
+            }
+
+            if(MAP_ACTION_CALLBACKS[entityId] && content[key].sensor == 'alarm') {
+                if(MAP_ACTION_CALLBACKS[entityId].type == 'toggleButton') {
+                    var buttonCELL = graph.getModel().getCell(MAP_ACTION_CALLBACKS[entityId].cellId);
+
+                    switch (value) {
+                        case 0:
+                            MAP_ACTION_CALLBACKS[entityId].currentState = 0;
+                            var edit = new mxCellAttributeChange(buttonCELL, 'label', MAP_ACTION_CALLBACKS[entityId].states[0].title);
+                            graph.model.execute(edit);
+                            break;
+
+                        case 1:
+                            MAP_ACTION_CALLBACKS[entityId].currentState = 1;
+                            var edit = new mxCellAttributeChange(buttonCELL, 'label', MAP_ACTION_CALLBACKS[entityId].states[1].title);
+                            graph.model.execute(edit);
+                            break;
+                    }
+                }
+            }
         }
 
         model.endUpdate();
@@ -842,6 +749,167 @@ function renderLiveDataOnMapWithPitch(content) {
     }
 }
 
+function updateMapElementByType(entityId, value, index) {
+    switch (DYNAMIC_CELLS[entityId][index].type) {
+
+        case 'visibility':
+            try {
+                var vis = DYNAMIC_CELLS[entityId][index],
+                    cell = vis.cell,
+                    visOpacities = vis.opacities,
+                    visValues = vis.values;
+
+                visValueIndex = visValues.indexOf(parseInt(value));
+                var opacity = visOpacities[visValueIndex];
+            }
+            catch (e) {
+                console.error(e);
+            }
+            finally {
+                // graph.getModel().setVisible(cell, value);
+                graph.setCellStyles(mxConstants.STYLE_OPACITY, opacity, [cell]);
+            }
+            break;
+
+        case 'led':
+            try {
+                var led = DYNAMIC_CELLS[entityId][index],
+                    cell = led.cell,
+                    ledColors = led.colors,
+                    ledValues = led.values;
+
+                ledValueIndex = ledValues.indexOf(parseInt(value));
+                var color = ledColors[ledValueIndex];
+            }
+            catch (e) {
+                console.error(e);
+            }
+            finally {
+                graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, color, [cell]);
+            }
+            break;
+
+        case 'progress_bar':
+            try {
+                var progressBar = DYNAMIC_CELLS[entityId][index],
+                    cell = progressBar.cell,
+                    cellOrientation = progressBar.cellOrientation;
+            }
+            catch (e) {
+                console.error(e);
+            }
+            finally {
+                var cellGeometry = cell.getGeometry();
+
+                if (cellOrientation == 'vertical') {
+                    cellGeometry.height = (value - progressBar.valueMin) / progressBar.valueRatio;
+                    cellGeometry.y = progressBar.endPoint.y - ((value - progressBar.valueMin) / progressBar.valueRatio);
+                }
+                else {
+                    cellGeometry.width = (value - progressBar.valueMin) / progressBar.valueRatio;
+                }
+
+                var color = progressBar.progressBarColors[0];
+
+                for (var k = 0; k < progressBar.progressBarStops.length; k++) {
+                    if (value > progressBar.progressBarStops[k]) {
+                        color = progressBar.progressBarColors[k];
+                    }
+                    else {
+                        color = progressBar.progressBarColors[k - 1];
+                        break;
+                    }
+                }
+
+                graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, color, [cell]);
+            }
+            break;
+
+        case 'speedometer':
+            try {
+                var speedometer = DYNAMIC_CELLS[entityId][index],
+                    cell = speedometer.cell;
+            }
+            catch (e) {
+                console.error(e);
+            }
+            finally {
+                var cellGeometry = cell.getGeometry();
+
+                var angel = ((value - speedometer.previousValue) * speedometer.angel) / speedometer.maxValue - speedometer.minValue;
+
+                cellGeometry.rotate(angel, cellGeometry.sourcePoint);
+
+                DYNAMIC_CELLS[entityId][index].previousValue = value;
+                cell.setAttribute('previousValue', value);
+
+                graph.getView().clear(cell, false, false);
+                graph.getView().validate();
+
+                // var state = graph.view.getState(cell);
+                //
+                // if (state) {
+                //     var cssStyle = `
+                //         transform-origin: ${state.origin.x}px ${state.origin.y}px;
+                //         -webkit-transform: rotate(${angel}deg);
+                //         transform: rotate(${angel}deg);
+                //     `;
+                //
+                //     var edit = new mxCellAttributeChange(cell, 'style', cssStyle);
+                //     graph.model.execute(edit);
+                //
+                //     graph.getView().clear(cell, false, false);
+                //     graph.getView().validate();
+                //
+                //     // Pure Javascript
+                //     // state.shape.node.firstChild.classList.add('rotate-center-' + uniqueId);
+                // }
+            }
+            break;
+
+        default:
+            try {
+                var customNode = DYNAMIC_CELLS[entityId][index],
+                    cell = customNode.cell,
+                    unit = customNode.unit || '';
+
+                var label = cell.getAttribute('label');
+                if (!isNaN(value)) {
+                    var newValue = Math.round(value * Math.pow(10, numbersRoundPrecision)) / Math.pow(10, numbersRoundPrecision) + ' ' + unit;
+                } else {
+                    var newValue = value + ' ' + unit;
+                }
+
+                if (label.indexOf('<') != -1) {
+                    var regex = /[>]([^<\n]+?)[<]/gm;
+                    var result = label.match(regex);
+
+                    if (result.length == 1) {
+                        var newLabel = label.replace(new RegExp(regex), '>' + newValue.toString() + '<');
+                        var edit = new mxCellAttributeChange(cell, 'label', newLabel);
+                        graph.model.execute(edit);
+                    }
+                    else {
+                        var start = label.indexOf(result[0]);
+                        var end = label.indexOf(result[result.length - 1]);
+                        var newLabel = label.substr(0, start + 1) + newValue.toString() +
+                            label.substring(end + result[result.length - 1].length - 1, label.length);
+                        var edit = new mxCellAttributeChange(cell, 'label', newLabel);
+                        graph.model.execute(edit);
+                    }
+                }
+                else {
+                    var edit = new mxCellAttributeChange(cell, 'label', newValue);
+                    graph.model.execute(edit);
+                }
+            }
+            catch (e) {
+                console.error(e);
+            }
+            break;
+    }
+}
+
 function changeMap(data) {
     refreshingMap = true;
 
@@ -863,7 +931,6 @@ function changeMap(data) {
         .beginUpdate();
 
     try {
-        // switch (mapData.type) {
         switch (mapXmlType) {
             case 'file':
                 createGraphFromXmlFile(graph, mapXmlData);
@@ -905,10 +972,45 @@ function changeMap(data) {
          * to mxGraphModel's background attribute
          */
         document.body.style.background = graph.model.background;
+
         if (outlineDOM != null) {
             outlineDOM.style.background = graph.model.background;
         }
         refreshingMap = false;
+    }
+
+    /**
+     * Remove Get Device Data Intervals and
+     * Notifications of previous page :\
+     */
+    for (interval in httpAjaxRequestInterval) {
+        clearInterval(httpAjaxRequestInterval[interval]);
+
+        delete(MAP_DEVICES[interval]);
+    }
+
+    /**
+     * Stop playing all sounds
+     */
+    for (sound in alarmSounds) {
+        if (typeof alarmSounds[sound] === "object") {
+            alarmSounds[sound].stop(0);
+            delete(alarmSounds[sound]);
+        }
+    }
+
+    /**
+     * Clear all Notifications
+     * TODO, Remove notification intervals
+     */
+    document.getElementById('notificationContainer').innerHTML = "";
+
+    for (i in notifications) {
+        for (j in notifications[i]) {
+            clearTimeout(notifications[i][j].timeOutValue);
+            delete(notifications[i][j]);
+        }
+        delete(notifications[i]);
     }
 
     updateMap();
@@ -935,7 +1037,7 @@ function addToolbarButton(graphObj, toolbar, action, label, image, isTransparent
         button.style.border = 'none';
     }
 
-    mxEvent.addListener(button, 'click', function(evt) {
+    mxEvent.addListener(button, 'click', function (evt) {
         switch (action) {
             case 'async':
                 switch (asyncClient.getAsyncState()) {
@@ -967,6 +1069,17 @@ function addToolbarButton(graphObj, toolbar, action, label, image, isTransparent
                         notificationMenuOpen = false;
                         document.getElementById('toolbar-notifications').innerText = 'Notifications: Off';
                         Toastify.reposition();
+
+                        muteAlarms = true;
+                        for (var i in alarmSounds) {
+                            try {
+                                alarmSounds[i].stop(0);
+                                delete(alarmSounds[i]);
+                            } catch (e) {
+                                console.log(e);
+                            }
+                        }
+                        document.getElementById('toolbar-mute').innerText = 'Unmute';
                         break;
 
                     case false:
@@ -974,8 +1087,48 @@ function addToolbarButton(graphObj, toolbar, action, label, image, isTransparent
                         notificationMenuOpen = true;
                         document.getElementById('toolbar-notifications').innerText = 'Notifications: On';
                         Toastify.reposition();
+
+
+                        muteAlarms = false;
+                        for (var i in alarmSounds) {
+                            try {
+                                alarmSounds[i].start(0);
+                            } catch (e) {
+                                console.log(e);
+                            }
+                        }
+                        document.getElementById('toolbar-mute').innerText = 'Mute';
                         break;
 
+                }
+                break;
+
+            case 'mute':
+                switch (muteAlarms) {
+                    case true:
+                        muteAlarms = false;
+                        for (var i in alarmSounds) {
+                            try {
+                                alarmSounds[i].start(0);
+                            } catch (e) {
+                                console.log(e);
+                            }
+                        }
+                        document.getElementById('toolbar-mute').innerText = 'Mute';
+                        break;
+
+                    case false:
+                        muteAlarms = true;
+                        for (var i in alarmSounds) {
+                            try {
+                                alarmSounds[i].stop(0);
+                                delete(alarmSounds[i]);
+                            } catch (e) {
+                                console.log(e);
+                            }
+                        }
+                        document.getElementById('toolbar-mute').innerText = 'Unmute';
+                        break;
                 }
                 break;
 
@@ -1037,17 +1190,193 @@ function addToolbarButton(graphObj, toolbar, action, label, image, isTransparent
     toolbar.appendChild(button);
 };
 
-function updateMap() {
+function emptyAllMapObjects() {
     DYNAMIC_CELLS = {};
+    MAP_ANIMATIONS = {};
+    MAP_CELLS = {};
+    MAP_LEDS = {};
+    MAP_PROGRESS_BAR = {};
+    MAP_SPEEDOMETER = {};
+    MAP_VISIBILITY = {};
+}
+
+function getDataForDevice(deviceId) {
+    switch (protocolType) {
+        case 'http':
+            httpAjaxRequestInterval[deviceId] = setInterval(function () {
+                let xhr = new XMLHttpRequest();
+                xhr.open(API_SERVICES.READ_DATA.method, protocolParams.url + API_SERVICES.READ_DATA.url + deviceId);
+                xhr.setRequestHeader('Authorization', 'Bearer  ' + TOKEN);
+                xhr.setRequestHeader('timestamp', new Date().getTime());
+                xhr.send();
+                xhr.onerror = function () {
+                    document.getElementById('toolbar-lastUpdate').innerText = 'Error at ' + new Date().toLocaleTimeString();
+                    document.getElementById('toolbar-lastUpdate').style.background = 'red';
+                    document.getElementById('toolbar-lastUpdate').style.color = 'white';
+                };
+                xhr.onload = function () {
+                    if (xhr.status != 200) {
+                        console.error(`Error ${xhr.status}: ${xhr.statusText}`);
+
+                        document.getElementById('toolbar-lastUpdate').innerText = 'Error at ' + new Date().toLocaleTimeString();
+                        document.getElementById('toolbar-lastUpdate').style.background = 'red';
+                        document.getElementById('toolbar-lastUpdate').style.color = 'white';
+                    }
+                    else {
+                        try {
+                            var result = JSON.parse(xhr.responseText);
+
+                            if (result.message.statusCode == 0) {
+                                var resultData = result.data.attributes,
+                                    sensorData = [];
+
+                                for (var i in resultData) {
+                                    var name = resultData[i].name,
+                                        value = resultData[i].value;
+
+                                    switch (name) {
+                                        case 'temp':
+                                            if (value > TEMPERATURE_THRESHOLD && value != MAP_DEVICES[deviceId].temp) {
+                                                var alarmId = deviceId;
+
+                                                var data = {
+                                                    entityType: 'alarm',
+                                                    entityId: deviceId,
+                                                    id: alarmId,
+                                                    value: Math.random() * 50,
+                                                    message: 'Temperature is getting high. Current value is ' + value + '°C.',
+                                                    dateTime: Date.now(),
+                                                    alarmType: 'warning',
+                                                    alarmSensor: 'temp'
+                                                };
+                                                handleNotifications(data);
+                                            }
+                                            MAP_DEVICES[deviceId].temp = value;
+                                            break;
+
+                                        case 'humidity':
+                                            if (value < HUMIDITY_THRESHOLD && value != MAP_DEVICES[deviceId].humidity) {
+                                                var alarmId = deviceId;
+
+                                                var data = {
+                                                    entityType: 'alarm',
+                                                    entityId: deviceId,
+                                                    id: alarmId,
+                                                    value: Math.random() * 50,
+                                                    message: 'Humidity is under ' + HUMIDITY_THRESHOLD + '%. Current humidity is ' + value + '%.',
+                                                    dateTime: Date.now(),
+                                                    alarmType: 'warning',
+                                                    alarmSensor: 'humidity'
+                                                };
+                                                handleNotifications(data);
+                                            }
+                                            MAP_DEVICES[deviceId].humidity = value;
+                                            break;
+
+                                        case 'door':
+                                            if (value == "open" && value != MAP_DEVICES[deviceId].door) {
+                                                var alarmId = deviceId;
+
+                                                var data = {
+                                                    entityType: 'alarm',
+                                                    entityId: deviceId,
+                                                    id: alarmId,
+                                                    value: Math.random() * 50,
+                                                    message: 'Door is Open',
+                                                    dateTime: Date.now(),
+                                                    alarmType: 'info',
+                                                    alarmSensor: 'door'
+                                                };
+                                                handleNotifications(data);
+                                            }
+                                            MAP_DEVICES[deviceId].door = value;
+                                            break;
+
+                                        case 'smokdetection':
+                                            if (value == "true" && value != MAP_DEVICES[deviceId].smokdetection) {
+                                                var alarmId = deviceId;
+
+                                                var data = {
+                                                    entityType: 'alarm',
+                                                    entityId: deviceId,
+                                                    id: alarmId,
+                                                    value: Math.random() * 50,
+                                                    message: 'Smoke has been detected in room, please refer to instructions.',
+                                                    dateTime: Date.now(),
+                                                    alarmType: 'danger',
+                                                    alarmSensor: 'smokdetection'
+                                                };
+                                                handleNotifications(data);
+                                            }
+                                            MAP_DEVICES[deviceId].smokdetection = value;
+                                            break;
+
+                                        case 'alarm':
+                                            MAP_DEVICES[deviceId].alarm = value;
+                                            deviceAlarmState[deviceId] = value;
+
+                                            if (value == 'on') {
+                                                playSound('siren', {alarmId: deviceId});
+                                                value = 1;
+
+                                            } else if (value == 'off') {
+                                                muteAlarm(deviceId);
+                                                value = 0;
+                                            }
+                                            break;
+                                    }
+
+                                    sensorData.push({
+                                        entityType: 'deviceTag',
+                                        entityId: deviceId,
+                                        value: value,
+                                        sensor: name
+                                    });
+                                }
+
+                                renderLiveDataOnMapWithPitch(sensorData);
+                            }
+
+                            document.getElementById('toolbar-lastUpdate').innerText = 'Last updated at ' + new Date().toLocaleTimeString();
+                            document.getElementById('toolbar-lastUpdate').style.background = 'green';
+                            document.getElementById('toolbar-lastUpdate').style.color = 'white';
+                        }
+                        catch (e) {
+                            console.log(e);
+                        }
+                    }
+                };
+            }, renderingPitch * 1000);
+            break;
+    }
+}
+
+function updateMap() {
+    emptyAllMapObjects();
+
     allCells = Object.values(graph.getModel().cells);
 
     try {
         for (var i = 0; i < allCells.length; i++) {
             if (mxUtils.isNode(allCells[i].value)) {
-                var cellEntityId = allCells[i].getAttribute('entityId');
+                var cellEntityId = allCells[i].getAttribute('entityId'),
+                    cellUniqueId = allCells[i].getId(),
+                    cellType = allCells[i].getAttribute('type');
+
+
+                /**
+                 * If the tag is a device sensor tag, we have to set
+                 */
+                if (allCells[i].getAttribute('sensorType') == 'deviceSensor') {
+                    if (!MAP_DEVICES.hasOwnProperty(cellEntityId)) {
+                        MAP_DEVICES[cellEntityId] = {};
+                        getDataForDevice(cellEntityId);
+                    }
+                }
 
                 if (allCells[i].getAttribute('onClick') != undefined) {
-                    MAP_CALLBACKS[allCells[i].id] = allCells[i].getAttribute('onClick');
+                    // TODO repair onClick
+                    // MAP_BUTTONS[allCells[i].id] = allCells[i].getAttribute('onClick');
                 }
 
                 if (cellEntityId) {
@@ -1057,25 +1386,30 @@ function updateMap() {
                     var tagConnections = allCells[i].getAttribute('tagConnections');
                     try {
                         tagConnections = JSON.parse(tagConnections);
-                    } catch(e) {
+                    }
+                    catch (e) {
                         console.log(e);
-                    } finally {
-                        switch (allCells[i].getAttribute('type')) {
+                    }
+                    finally {
+                        switch (cellType) {
                             case 'visibility':
                                 var visValues = [],
                                     visOpacities = [],
-                                    visBreakPoints = JSON.parse(tagConnections.breakPoints);
+                                    visBreakPoints = JSON.parse(tagConnections.breakPoints),
+                                    sensorName = (typeof tagConnections.sensor == 'string') ? tagConnections.sensor : '';
 
-                                    for (var b in visBreakPoints) {
-                                        visValues.push(parseFloat(b));
-                                        visOpacities.push(visBreakPoints[b]);
-                                    }
+                                for (var b in visBreakPoints) {
+                                    visValues.push(parseFloat(b));
+                                    visOpacities.push(visBreakPoints[b]);
+                                }
 
                                 if (!Array.isArray(MAP_VISIBILITY[cellEntityId])) {
                                     MAP_VISIBILITY[cellEntityId] = [];
                                 }
 
                                 MAP_VISIBILITY[cellEntityId].push({
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     values: visValues,
@@ -1084,6 +1418,8 @@ function updateMap() {
 
                                 DYNAMIC_CELLS[cellEntityId].push({
                                     type: 'visibility',
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     values: visValues,
@@ -1095,17 +1431,21 @@ function updateMap() {
                             case 'led':
                                 var ledValues = [],
                                     ledColors = [],
-                                    ledBreakPoints = JSON.parse(tagConnections.breakPoints);
-                                    for (var b in ledBreakPoints) {
-                                        ledValues.push(parseFloat(b));
-                                        ledColors.push(ledBreakPoints[b]);
-                                    }
+                                    ledBreakPoints = JSON.parse(tagConnections.breakPoints),
+                                    sensorName = (typeof tagConnections.sensor == 'string') ? tagConnections.sensor : '';
+
+                                for (var b in ledBreakPoints) {
+                                    ledValues.push(parseFloat(b));
+                                    ledColors.push(ledBreakPoints[b]);
+                                }
 
                                 if (!Array.isArray(MAP_LEDS[cellEntityId])) {
                                     MAP_LEDS[cellEntityId] = [];
                                 }
 
                                 MAP_LEDS[cellEntityId].push({
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     label: allCells[i].getAttribute('label'),
@@ -1115,6 +1455,8 @@ function updateMap() {
 
                                 DYNAMIC_CELLS[cellEntityId].push({
                                     type: 'led',
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     label: allCells[i].getAttribute('label'),
@@ -1127,47 +1469,59 @@ function updateMap() {
                             case 'progress_bar':
                                 var cellGeometry = allCells[i].getGeometry(),
                                     cellLength = (cellGeometry.height > cellGeometry.width) ? cellGeometry.height : cellGeometry.width,
-                                    initialLength = (MAP_PROGRESS_BAR[cellEntityId] && MAP_PROGRESS_BAR[cellEntityId][0].initialLength > 0)
-                                        ? MAP_PROGRESS_BAR[cellEntityId][0].initialLength
+                                    initialLength = (allCells[i].getAttribute('initialLength') && allCells[i].getAttribute('initialLength') > 0)
+                                        ? allCells[i].getAttribute('initialLength')
                                         : cellLength,
-                                    valueRatio = (tagConnections.maxValue > 0) ? tagConnections.maxValue / initialLength : 1,
+                                    valueMin = (!isNaN(tagConnections.minValue)) ? tagConnections.minValue : 0,
+                                    valueMax = (!isNaN(tagConnections.maxValue)) ? tagConnections.maxValue : 0,
+                                    valueRatio = (Math.abs(valueMax) > 0) ? Math.abs(valueMax - valueMin) / initialLength : 1,
                                     progressBarStops = [],
                                     progressBarColors = [],
-                                    progressBarBreakPoints = JSON.parse(tagConnections.breakPoints);
+                                    progressBarBreakPoints = JSON.parse(tagConnections.breakPoints),
+                                    sensorName = (typeof tagConnections.sensor == 'string') ? tagConnections.sensor : '';
 
-                                    for (var b in progressBarBreakPoints) {
-                                        progressBarStops.push(parseFloat(b));
-                                        progressBarColors.push(progressBarBreakPoints[b]);
-                                    }
-
-
-                                if (!Array.isArray(MAP_PROGRESS_BAR[cellEntityId])) {
-                                    MAP_PROGRESS_BAR[cellEntityId] = [];
-
-                                    MAP_PROGRESS_BAR[cellEntityId].push({
-                                        cell: allCells[i],
-                                        id: allCells[i].id,
-                                        label: allCells[i].getAttribute('label'),
-                                        initialLength: initialLength,
-                                        valueRatio: valueRatio,
-                                        progressBarStops: progressBarStops,
-                                        progressBarColors: progressBarColors,
-                                        endPoint: {
-                                            x: cellGeometry.y + cellGeometry.width,
-                                            y: cellGeometry.y + cellGeometry.height
-                                        },
-                                        cellOrientation: (cellGeometry.height > cellGeometry.width)
-                                            ? 'vertical'
-                                            : 'horizontal'
-                                    });
+                                if (allCells[i].getAttribute('initialLength') == undefined) {
+                                    allCells[i].setAttribute('initialLength', cellLength);
                                 }
+
+                                for (var b in progressBarBreakPoints) {
+                                    progressBarStops.push(parseFloat(b));
+                                    progressBarColors.push(progressBarBreakPoints[b]);
+                                }
+
+                                if (typeof MAP_PROGRESS_BAR[cellEntityId] != "object") {
+                                    MAP_PROGRESS_BAR[cellEntityId] = {};
+                                }
+
+                                MAP_PROGRESS_BAR[cellEntityId][cellUniqueId] = {
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
+                                    cell: allCells[i],
+                                    id: allCells[i].id,
+                                    label: allCells[i].getAttribute('label'),
+                                    initialLength: initialLength,
+                                    valueRatio: valueRatio,
+                                    valueMin: valueMin,
+                                    progressBarStops: progressBarStops,
+                                    progressBarColors: progressBarColors,
+                                    endPoint: {
+                                        x: cellGeometry.y + cellGeometry.width,
+                                        y: cellGeometry.y + cellGeometry.height
+                                    },
+                                    cellOrientation: (cellGeometry.height > cellGeometry.width)
+                                        ? 'vertical'
+                                        : 'horizontal'
+                                };
 
                                 DYNAMIC_CELLS[cellEntityId].push({
                                     type: 'progress_bar',
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     label: allCells[i].getAttribute('label'),
                                     valueRatio: valueRatio,
+                                    valueMin: valueMin,
                                     initialLength: initialLength,
                                     progressBarStops: progressBarStops,
                                     progressBarColors: progressBarColors,
@@ -1179,14 +1533,26 @@ function updateMap() {
                                         ? 'vertical'
                                         : 'horizontal'
                                 });
+
                                 break;
 
                             case 'speedometer':
+                                var sensorName = (typeof tagConnections.sensor == 'string') ? tagConnections.sensor : '',
+                                    previousValue = (allCells[i].getAttribute('previousValue') && !isNaN(allCells[i].getAttribute('previousValue')))
+                                        ? allCells[i].getAttribute('previousValue')
+                                        : 0;
+
                                 if (!Array.isArray(MAP_SPEEDOMETER[cellEntityId])) {
                                     MAP_SPEEDOMETER[cellEntityId] = [];
                                 }
 
+                                if (allCells[i].getAttribute('previousValue') == undefined) {
+                                    allCells[i].setAttribute('previousValue', cellLength);
+                                }
+
                                 MAP_SPEEDOMETER[cellEntityId].push({
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     label: allCells[i].getAttribute('label'),
@@ -1194,10 +1560,12 @@ function updateMap() {
                                     maxValue: tagConnections.maxValue,
                                     step: tagConnections.step,
                                     angel: tagConnections.angel,
-                                    previousValue: 0
+                                    previousValue: previousValue
                                 });
 
                                 DYNAMIC_CELLS[cellEntityId].push({
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     type: 'speedometer',
                                     cell: allCells[i],
                                     id: allCells[i].id,
@@ -1206,16 +1574,20 @@ function updateMap() {
                                     maxValue: tagConnections.maxValue,
                                     step: tagConnections.step,
                                     angel: tagConnections.angel,
-                                    previousValue: 0
+                                    previousValue: previousValue
                                 });
                                 break;
 
                             case 'text':
+                                var sensorName = (typeof tagConnections.sensor == 'string') ? tagConnections.sensor : '';
+
                                 if (!Array.isArray(MAP_CELLS[cellEntityId])) {
                                     MAP_CELLS[cellEntityId] = [];
                                 }
 
                                 MAP_CELLS[cellEntityId].push({
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     label: allCells[i].getAttribute('label'),
@@ -1223,6 +1595,8 @@ function updateMap() {
                                 });
 
                                 DYNAMIC_CELLS[cellEntityId].push({
+                                    sensorType: allCells[i].getAttribute('sensorType'),
+                                    sensor: sensorName,
                                     cell: allCells[i],
                                     id: allCells[i].id,
                                     label: allCells[i].getAttribute('label'),
@@ -1236,19 +1610,21 @@ function updateMap() {
                         var tagAnimations = allCells[i].getAttribute('tagAnimations');
                         try {
                             tagAnimations = JSON.parse(tagAnimations);
-                        } catch(e) {
+                        }
+                        catch (e) {
                             console.log(e);
-                        } finally {
+                        }
+                        finally {
                             switch (tagAnimations.animation) {
                                 case 'rotate':
                                     var rotateValues = [],
                                         rotateSpeeds = [],
                                         rotateBreakPoints = JSON.parse(tagAnimations.rotateBreakPoints);
 
-                                        for (var b in rotateBreakPoints) {
-                                            rotateValues.push(parseFloat(b));
-                                            rotateSpeeds.push(rotateBreakPoints[b]);
-                                        }
+                                    for (var b in rotateBreakPoints) {
+                                        rotateValues.push(parseFloat(b));
+                                        rotateSpeeds.push(rotateBreakPoints[b]);
+                                    }
 
                                     if (!Array.isArray(MAP_ANIMATIONS[cellEntityId])) {
                                         MAP_ANIMATIONS[cellEntityId] = [];
@@ -1271,6 +1647,58 @@ function updateMap() {
                         }
                     }
                 }
+
+                if (allCells[i].getAttribute('button')) {
+                    var tagButtons = allCells[i].getAttribute('tagButtons');
+                    try {
+                        tagButtons = JSON.parse(tagButtons);
+                    }
+                    catch (e) {
+                        console.log(e);
+                    }
+                    finally {
+                        switch (allCells[i].getAttribute('button')) {
+
+                            case 'simplePushButton':
+                                MAP_ACTION_CALLBACKS[tagButtons.entityId] = {
+                                    type: 'simplePushButton',
+                                    cellId: cellUniqueId,
+                                    action: tagButtons.action,
+                                    title: tagButtons.title
+                                };
+
+                                MAP_BUTTONS[allCells[i].id] = tagButtons.entityId;
+                                var edit = new mxCellAttributeChange(allCells[i], 'label', tagButtons.title);
+                                graph.model.execute(edit);
+                                break;
+
+                            case 'toggleButton':
+                                MAP_ACTION_CALLBACKS[tagButtons.entityId] = {
+                                    type: 'toggleButton',
+                                    cellId: cellUniqueId,
+                                    currentState: 0,
+                                    states: [
+                                        {
+                                            action: tagButtons.stateOneAction,
+                                            title: tagButtons.stateOneTitle
+                                        },
+                                        {
+                                            action: tagButtons.stateTwoAction,
+                                            title: tagButtons.stateTwoTitle
+                                        }
+                                    ]
+                                };
+
+                                MAP_BUTTONS[allCells[i].id] = tagButtons.entityId;
+                                var edit = new mxCellAttributeChange(allCells[i], 'label', tagButtons.stateOneTitle);
+                                graph.model.execute(edit);
+                                break;
+
+                            default:
+                                break;
+                        }
+                    }
+                }
             }
         }
     }
@@ -1285,13 +1713,14 @@ function updateMap() {
         MAP_LEDS,
         MAP_PROGRESS_BAR,
         MAP_SPEEDOMETER,
-        MAP_VISIBILITY
+        MAP_VISIBILITY,
+        MAP_DEVICES,
+        MAP_ACTION_CALLBACKS,
+        MAP_BUTTONS
     });
 }
 
 function handleNotifications(alarm) {
-    var uniqueId = alarm.id;
-
     Toastify({
         selector: 'notificationContainer',
         text: alarm.message,
@@ -1303,78 +1732,127 @@ function handleNotifications(alarm) {
         gravity: toasterParams.positionVertical || 'bottom',
         positionLeft: (typeof toasterParams.positionHorizontal == 'string') ? toasterParams.positionHorizontal == 'left' : true,
         className: (typeof alarm.alarmType == 'string') ? 'toastify-' + alarm.alarmType : 'toastify-warning',
-        callback: function() {
+        callback: function () {
         },
         actions: {
-            acknowledge: {
-                id: alarm.id,
-                uniqueId: uniqueId,
-                name: 'Send Ack',
-                callback: function() {
-                    sendAlarmAcknowledge(alarm.id, uniqueId);
-                }
-            },
+            // mute: {
+            //     id: alarm.id,
+            //     name: 'Mute!',
+            //     callback: function () {
+            //         muteAlarm(alarm.id);
+            //     }
+            // },
             close: {
                 id: alarm.id,
-                uniqueId: uniqueId,
                 name: 'Close',
-                disable: !alarm.acknowledged,
-                callback: function(event) {
-                    sendAlarmClose(alarm.id);
+                disable: false,
+                callback: function (event) {
                     event.target.parentElement.parentElement.removeChild(event.target.parentElement);
                     Toastify.reposition();
                 }
-            },
-            // forceClose: {
-            //     id: alarm.entityId,
-            //     uniqueId: uniqueId,
-            //     name: 'Force Close!',
-            //     callback: function(event) {
-            //         event.target.parentElement.parentElement.removeChild(event.target.parentElement);
-            //         Toastify.reposition();
-            //     }
-            // }
+            }
         }
-    })
-        .showToast(function(element) {
-            notifications.push(element);
-        });
+    }).showToast(function (element) {
+        if (typeof notifications[alarm.id] !== "object") {
+            notifications[alarm.id] = {};
+        }
+
+        notifications[alarm.id][alarm.alarmSensor] = element;
+    });
 }
 
-function sendAlarmAcknowledge(id, uniqueId) {
-    // var data = {
-    //     type: 10,
-    //     content: JSON.stringify({
-    //         id: id
-    //     })
-    // };
-    //
-    // sendAsyncMessage(data);
-    document.getElementById(id + '-' + uniqueId + '-close').disabled = false;
+function muteAlarm(id) {
+    if (id.length > 0 && alarmSounds[id]) {
+        alarmSounds[id].stop(0);
+        delete(alarmSounds[id]);
+    }
+}
+
+function sendAlarmAcknowledge(id) {
+    var data = {
+        type: 16,
+        content: JSON.stringify({
+            entityId: id,
+            userId: 1
+        })
+    };
+
+    sendAsyncMessage(data);
+    document.getElementById(id + '-close').disabled = false;
+
+    // Turn alarms off
+    if (id > 0 && alarmSounds[id]) {
+        alarmSounds[id].stop(0);
+        delete(alarmSounds[id]);
+    }
+}
+
+function sendAlarmForDevice(deviceId) {
+    if (deviceAlarmState[deviceId] != 'on') {
+
+        var data = JSON.stringify([
+            {
+                "name": "alarm",
+                "value": "on"
+            }
+        ]);
+
+        var xhr = new XMLHttpRequest();
+        xhr.withCredentials = false;
+
+        xhr.addEventListener("readystatechange", function () {
+            if (this.readyState === 4) {
+                console.log(this.responseText);
+            }
+        });
+
+        xhr.open(API_SERVICES.SEND_DATA.method, protocolParams.url + API_SERVICES.SEND_DATA.url + deviceId);
+        xhr.setRequestHeader('Authorization', 'Bearer  ' + TOKEN);
+        xhr.setRequestHeader('timestamp', new Date().getTime());
+        xhr.send(data);
+    } else {
+        console.log("Alarm is already on for this device");
+    }
 }
 
 function sendAlarmClose(id) {
-    // var data = {
-    //     type: 11,
-    //     content: JSON.stringify({
-    //         id: id
-    //     })
-    // };
-    //
-    // sendAsyncMessage(data);
+    // muteAlarm(id);
+
+    var data = JSON.stringify([
+        {
+            "name": "alarm",
+            "value": "off"
+        }
+    ]);
+
+    var xhr = new XMLHttpRequest();
+    xhr.withCredentials = false;
+
+    xhr.addEventListener("readystatechange", function () {
+        if (this.readyState === 4) {
+            console.log(this.responseText);
+        }
+    });
+
+    xhr.open(API_SERVICES.SEND_DATA.method, protocolParams.url + API_SERVICES.SEND_DATA.url + id);
+    xhr.setRequestHeader('Authorization', 'Bearer  ' + TOKEN);
+    xhr.setRequestHeader('timestamp', new Date().getTime());
+    xhr.send(data);
 }
 
 /**
  * Global Window Functions
  */
 
-window.addEventListener('resize', function() {
+window.addEventListener('resize', function () {
     if (graph) {
         cw = graph.container.clientWidth - margin;
         ch = graph.container.clientHeight - margin;
 
-        outlineDOM.style.width = containerDOM.getBoundingClientRect().width / 5;
-        outlineDOM.style.height = containerDOM.getBoundingClientRect().height / 5;
+        if(outlineDOM) {
+            outlineDOM.style.width = containerDOM.getBoundingClientRect().width / 5;
+            outlineDOM.style.height = containerDOM.getBoundingClientRect().height / 5;
+        }
     }
 });
 
@@ -1383,7 +1861,8 @@ window.addEventListener('resize', function() {
  */
 
 function fakeDataGenerator() {
-    setInterval(function() {
+    return;
+    setInterval(function () {
         var data = {
             entityType: 'tag',
             entityId: '16',
@@ -1565,17 +2044,29 @@ function fakeDataGenerator() {
         asyncData[data.entityId] = data;
     }, 100);
 
-    setInterval(function() {
+    setInterval(function () {
         var types = ['danger', 'warning', 'info', ''];
+
+        var alarmType = types[Math.floor(Math.random() * 4)];
+        var alarmId = Math.floor(Math.random() * 10000);
+
         var data = {
             entityType: 'alarm',
-            entityId: Math.floor(Math.random() * 10),
+            entityId: Math.floor(Math.random() * 10000),
+            id: alarmId,
             value: Math.random() * 50,
             message: 'This is a random message at ' + new Date().toLocaleDateString() + ' - ' + new Date().toLocaleTimeString(),
-            creationTime: Date.now(),
-            alarmType: types[Math.floor(Math.random() * 4)]
+            dateTime: Date.now(),
+            alarmType: alarmType
         };
         handleNotifications(data);
+
+        if (alarmType == 'danger') {
+            playSound('siren', {alarmId: alarmId});
+        }
+        else if (alarmType == 'warning') {
+            playSound('gas', {alarmId: alarmId});
+        }
     }, 5000);
 }
 
@@ -1605,4 +2096,90 @@ function toasterTime(timestamp) {
         monthName(new Date(timestamp).getMonth()) + ' ' +
         new Date(timestamp).getFullYear() + ' at ' +
         new Date(timestamp).toLocaleTimeString();
+}
+
+/**
+ * Sound Functions
+ */
+
+var sounds = {
+    'fire': {
+        url: 'sounds/Fire Alarm.mp3'
+    },
+    'danger': {
+        url: 'sounds/Danger Alarm.mp3'
+    },
+    'gas': {
+        url: 'sounds/Carbon Monoxide Detector.mp3'
+    },
+    'siren': {
+        url: 'sounds/Air Raid Synthesized.mp3'
+    }
+};
+
+var soundContext = new AudioContext();
+
+for (var key in sounds) {
+    loadSound(key);
+}
+
+function loadSound(name) {
+    var sound = sounds[name];
+
+    var url = sound.url;
+    var buffer = sound.buffer;
+
+    var request = new XMLHttpRequest();
+    request.open('GET', url, true);
+    request.responseType = 'arraybuffer';
+
+    request.onload = function () {
+        soundContext.decodeAudioData(request.response, function (newBuffer) {
+            sound.buffer = newBuffer;
+        });
+    };
+
+    request.send();
+}
+
+function playSound(name, options) {
+    var sound = sounds[name];
+    var soundVolume = sounds[name].volume || 1;
+
+    /**
+     * If there is an sound playing for this id, stop it first
+     */
+    if (typeof alarmSounds[options.alarmId] == "object") {
+        // alarmSounds[options.alarmId].stop(0);
+        // delete(alarmSounds[options.alarmId]);
+    } else {
+        var buffer = sound.buffer;
+        if (buffer) {
+            alarmSounds[options.alarmId] = soundContext.createBufferSource();
+            alarmSounds[options.alarmId].buffer = buffer;
+            alarmSounds[options.alarmId].loop = true;
+
+            var volume = soundContext.createGain();
+
+            if (options) {
+                if (options.volume) {
+                    volume.gain.value = soundVolume * options.volume;
+                }
+            }
+            else {
+                volume.gain.value = soundVolume;
+            }
+
+            volume.connect(soundContext.destination);
+
+            alarmSounds[options.alarmId].connect(volume);
+
+            if (!muteAlarms) {
+                alarmSounds[options.alarmId].start(0);
+                alarmSounds[options.alarmId].onended = function (event) {
+                    //TODO Clear this audio from memory
+                };
+            }
+        }
+    }
 }

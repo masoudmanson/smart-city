@@ -1,18 +1,17 @@
 <html>
 
 <head>
-    <title>Fanitoring Realtime HMI Viewer</title>
-    <!--<link rel="shortcut icon" href="http://185.104.229.164:12568/poddraw/webapp/favicon.png">-->
-    <link rel="shortcut icon" href="http://172.16.110.26/poddraw/webapp/favicon.png">
+    <title>IOT Realtime HMI Viewer</title>
+    <link rel="shortcut icon" href="http://185.104.229.164:12568/poddraw/webapp/favicon.png">
+    <!--<link rel="shortcut icon" href="http://172.16.110.26/poddraw/webapp/favicon.png">-->
 
     <link rel="stylesheet" href="style/style.css">
-    <!--<link href="https://fonts.googleapis.com/css?family=Roboto:300,400" rel="stylesheet">-->
 
     <script type="text/javascript">
-//        POD_DRAW_URL = 'http://185.104.229.164:12568/poddraw/webapp';
-        POD_DRAW_URL = 'http://172.16.110.26/poddraw/webapp';
+        POD_DRAW_URL = 'http://185.104.229.164:12568/poddraw/webapp';
+        // POD_DRAW_URL = 'http://172.16.110.26/poddraw/webapp';
     </script>
-
+l
     <script type="text/javascript" src="js/podasync.min.js"></script>
     <script type="text/javascript" src="js/viewer.min.js"></script>
     <script type="text/javascript" src="js/toastify-js.js"></script>
@@ -30,33 +29,33 @@
 <script type="text/javascript">
     (function () {
         main({
-            protocol: 'websockets',
-            // protocolParams : {
-            //     method: 'GET',
-            //     url: "http://parking.bidsys.ir/pardis/setget.php?CMD=GET&location=pardisb1"
-            // },
+            fakeData: false,
+            protocol: 'http',
             protocolParams: {
-                socketAddress: 'ws://172.16.110.20:8003/ws',
-                serverName: 'fanitoring-process',
-                peerId: 1736993,
-                reconnectOnClose: true,
-                connectionCheckTimeout: 10000,
-                serverRegisteration: true,
-                asyncLogging: {
-                    onFunction: true
+                url: "http://beta.api.thingscloud.ir"
+            },
+            services: {
+                READ_DATA: {
+                    method: "GET",
+                    url: "/device-data/"
+                },
+                SEND_DATA: {
+                    method: "POST",
+                    url: "/device-data/to-device/"
                 }
             },
+            token: "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxNTA1MzE1IiwiaXNzIjoiaHR0cHM6Ly93d3cuZmFuYXBpdW0uY29tLyIsInByZWZlcnJlZF91c2VybmFtZSI6InoubW9yc2hlZGkiLCJleHAiOjE4NzgzNTUzNTksImdpdmVuX25hbWUiOiLYstmH24zYsSIsImlhdCI6MTU2Mjk5NTM1OSwiZmFtaWx5X25hbWUiOiLZhdix2LTYr9uMINi12KfYptuM2YYiLCJwaWN0dXJlIjoiIn0.Ra07mDRj4UVCfTjQNOsHbKYAXiXTUeJvWoJjMSVbxxnAlnKiN8H-dvswnNmkIrqYbmpCuMAr4ARfD4tQzZdbBXKLf_qrhyazNsKkExPMC9vqp3ST7nDlvgyBQjZzgCH2ISG79UDwLNTpBM75t6pdHsFVxy5md0rerrCAr60o2n8",
             map: {
                 type: 'file',
-                data: 'maps/Fanitoring-Demo.xml',
-//                data: {
-//                    light: 'maps/fanitoring-light.xml',
-//                    dark: 'maps/fanitoring-dark.xml'
-//                },
+                data: 'maps/Smart City.xml',
                 theme: 'light'
             },
+            thresholds: {
+                temperature: 60,
+                humidity: 10
+            },
             graphContainer: 'podGraph',
-            outlineContainer: 'outlineContainer',
+            // outlineContainer: 'outlineContainer',
             statusContainer: 'statusContainer',
             notificationContainer: 'notificationContainer',
             notificationOptions: {
@@ -67,7 +66,7 @@
                 positionHorizontal: 'left',
                 positionVertical: 'top'
             },
-            renderingPitch: 'high', // high, medium or low
+            renderingPitch: 'medium', // high, medium or low
             numbersRoundPrecision: 2 // round numbers to at most 2 decimal places ( 2.325241 => 2.32 )
         });
     })();
